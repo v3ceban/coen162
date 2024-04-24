@@ -121,9 +121,8 @@ void *handle_client(void *client_socket_ptr) {
     printf("CLIENT: Server closed connection\n");
   }
 
-  // Close connections
-  close(client_fd);
   close(client_communication_socket);
+  close(client_fd);
   return NULL;
 }
 
@@ -153,6 +152,7 @@ int main(int argc, char **argv) {
   int addrlen = sizeof(address);
   if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
     perror("SERVER: socket failed");
+    close(server_fd);
     exit(EXIT_FAILURE);
   }
   address.sin_family = AF_INET;
@@ -160,10 +160,12 @@ int main(int argc, char **argv) {
   address.sin_port = htons(port);
   if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
     perror("SERVER: bind failed");
+    close(server_fd);
     exit(EXIT_FAILURE);
   }
   if (listen(server_fd, 3) < 0) {
     perror("SERVER: listen failed");
+    close(server_fd);
     exit(EXIT_FAILURE);
   }
 
@@ -181,6 +183,7 @@ int main(int argc, char **argv) {
              accept(server_fd, (struct sockaddr *)&address,
                     (socklen_t *)&addrlen)) < 0) {
       perror("SERVER: accept failed");
+      close(server_fd);
       exit(EXIT_FAILURE);
     }
 
