@@ -3,7 +3,6 @@
 #include "sbuf.h"
 #include <stdio.h>
 #include <strings.h>
-#include <time.h>
 
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
@@ -11,7 +10,6 @@
 #define SBUFSIZE 32
 /* Cache file name */
 #define CACHE_FILE "cache"
-#define TIMESTAMP "timestamp.txt"
 
 const int NTHREADS = 8; // number of working threads
 sbuf_t sbuf;            // shared buffer of connected descriptors
@@ -25,8 +23,6 @@ static const char *proxy_connection_hdr = "Proxy-Connection: close\r\n";
 int handle_uri(char *uri, char *hostname, char *path, int *port);
 void handle_proxy(int fd);
 void *thread(void *vargp);
-void read_timestamp_from_file(char *buffer, size_t size);
-void save_timestamp_to_file(void);
 
 int main(int argc, char **argv) {
   int i, listenfd, connfd;
@@ -47,9 +43,6 @@ int main(int argc, char **argv) {
 
   cache_init(CACHE_FILE);
   printf(">Cache initialized\n");
-
-  save_timestamp_to_file();
-  printf(">Timestamp saved\n");
 
   for (i = 0; i < NTHREADS; i++) { /* Create worker threads */
     int *id = Malloc(sizeof(int));
@@ -93,14 +86,13 @@ void handle_proxy(int fd) {
   char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
   char hostname[MAXLINE], path[MAXLINE], port[MAXLINE];
   char server_buf[MAXLINE], obj[MAX_OBJECT_SIZE];
-  char last_modified[128];
-  rio_t rio_client, rio_server;
+  rio_t rio_cilent, rio_server;
   int serverfd;
   int port_int;
   size_t n, obj_len = 0;
 
-  rio_readinitb(&rio_client, fd);
-  rio_readlineb(&rio_client, buf, MAXLINE);
+  rio_readinitb(&rio_cilent, fd);
+  rio_readlineb(&rio_cilent, buf, MAXLINE);
 
   sscanf(buf, "%s %s %s", method, uri, version);
   printf("Request line:\n");
@@ -117,68 +109,14 @@ void handle_proxy(int fd) {
     printf("hostname: %s, url: %s, port: %d\n", hostname, path, port_int);
     sprintf(port, "%d", port_int);
 
-    read_timestamp_from_file(last_modified, sizeof(last_modified));
-
     // read response from server
+    // cache hit -> return cache content
+    // miss -> socket connect to server
     cache_block *block = cache_find(hostname, path, port_int);
     if (block != NULL) {
       printf("Cache hit!\n");
-
-      // Send an If-Modified-Since GET request to the server
-      serverfd = open_clientfd(hostname, port);
-      if (serverfd < 0) {
-        printf("404: Proxy could not connect to this server\n");
-        return;
-      }
-
-      // send request to server
-      rio_readinitb(&rio_server, serverfd);
-      sprintf(server_buf, "GET %s HTTP/1.0\r\n", path);
-      rio_writen(serverfd, server_buf, strlen(server_buf));
-      sprintf(server_buf, "Host: %s\r\n", hostname);
-      rio_writen(serverfd, server_buf, strlen(server_buf));
-      if (strlen(last_modified) > 0) {
-        sprintf(server_buf, "If-Modified-Since: %s\r\n", last_modified);
-        rio_writen(serverfd, server_buf, strlen(server_buf));
-      }
-      rio_writen(serverfd, (void *)user_agent_hdr, strlen(user_agent_hdr));
-      rio_writen(serverfd, (void *)connection_hdr, strlen(connection_hdr));
-      rio_writen(serverfd, (void *)proxy_connection_hdr,
-                 strlen(proxy_connection_hdr));
-      rio_writen(serverfd, "\r\n", 2);
-
-      // read response header
-      rio_readlineb(&rio_server, buf, MAXLINE);
-      sscanf(buf, "%s %s", method, version);
-      if (strcmp(method, "HTTP/1.0") == 0 || strcmp(method, "HTTP/1.1") == 0) {
-        if (strcmp(version, "304") == 0) {
-          // Not modified
-          printf("Server response: Not Modified\n");
-          rio_writen(fd, block->content, block->size);
-          printf("Respond %ld bytes object from cache:\n", block->size);
-          Close(serverfd);
-          return;
-        }
-      }
-
-      // read the rest of the response from server
-      printf("Server response: Modified\n");
-      obj_len = 0;
-      while ((n = rio_readnb(&rio_server, server_buf, MAXLINE)) > 0) {
-        obj_len += n;
-        if (obj_len <= MAX_OBJECT_SIZE) {
-          memcpy(obj + obj_len - n, server_buf, n);
-        }
-        rio_writen(fd, server_buf, n); // send response to client
-      }
-      if (obj_len <= MAX_OBJECT_SIZE) {
-        cache_insert(hostname, path, port_int, obj, obj_len, CACHE_FILE);
-        printf("Cache updated %ld bytes object:\n", obj_len);
-      } else {
-        printf("Cache failed, object over limit size!\n");
-      }
-      printf("Respond %ld bytes object:\n", obj_len);
-      Close(serverfd);
+      rio_writen(fd, block->content, block->size);
+      printf("Respond %ld bytes object:\n", block->size);
       return;
     } else {
       printf("Cache miss!\n");
@@ -216,35 +154,8 @@ void handle_proxy(int fd) {
         printf("Cache failed, object over limit size!\n");
       }
       printf("Respond %ld bytes object:\n", obj_len);
-      Close(serverfd);
+      // Close(serverfd);
     }
-  }
-}
-
-void get_current_timestamp(char *buffer, size_t size) {
-  time_t now = time(NULL);
-  struct tm *tm_info = gmtime(&now);
-  strftime(buffer, size, "%a, %d %b %Y %H:%M:%S GMT", tm_info);
-}
-
-void save_timestamp_to_file() {
-  char buffer[128];
-  get_current_timestamp(buffer, sizeof(buffer));
-  FILE *file = fopen(TIMESTAMP, "w");
-  if (file) {
-    fprintf(file, "%s", buffer);
-    fclose(file);
-  }
-}
-
-void read_timestamp_from_file(char *buffer, size_t size) {
-  FILE *file = fopen(TIMESTAMP, "r");
-  if (file) {
-    fgets(buffer, size, file);
-    fclose(file);
-  } else {
-    // If the file does not exist, set an empty string
-    buffer[0] = '\0';
   }
 }
 
