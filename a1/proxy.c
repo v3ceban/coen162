@@ -127,11 +127,10 @@ void *handle_client(void *client_socket_ptr) {
 }
 
 // Close server socket on Ctrl-C
-void handle_sigint(int sig) {
-  if (sig == SIGINT) {
-    printf("Signal received: %d, exiting...\n", sig);
+void handle_signal(int signal) {
+  if (signal == SIGINT || signal == SIGTERM) {
     close(server_fd);
-    exit(EXIT_SUCCESS);
+    exit(0);
   }
 }
 
@@ -145,12 +144,13 @@ int main(int argc, char **argv) {
   int port = atoi(argv[1]);
 
   // close server socket on Ctrl-C
-  signal(SIGINT, handle_sigint);
+  signal(SIGINT, handle_signal);
+  signal(SIGTERM, handle_signal);
 
   // Create server socket, bind, and listen for connection
   struct sockaddr_in address;
   int addrlen = sizeof(address);
-  if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+  if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
     perror("SERVER: socket failed");
     close(server_fd);
     exit(EXIT_FAILURE);
