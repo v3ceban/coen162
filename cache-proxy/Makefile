@@ -20,3 +20,6 @@ sbuf.o: sbuf.c sbuf.h
 
 proxy: proxy.o cache.o helpers.o sbuf.o
 	$(CC) $(CFLAGS) proxy.o cache.o helpers.o sbuf.o -o proxy $(LDFLAGS)
+
+clean:
+	rm -f ./*.o ./proxy ./cache

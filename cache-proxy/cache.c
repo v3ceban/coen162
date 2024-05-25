@@ -68,7 +68,8 @@ cache_block *cache_find(char *hostname, char *path, int port) {
 }
 
 void cache_insert(char *hostname, char *path, int port, char *content,
-                  size_t size, const char *filename) {
+                  size_t size, const char *last_modified,
+                  const char *filename) {
   pthread_rwlock_wrlock(&cache->cache_lock);
   cache_block *temp = Malloc(sizeof(cache_block));
   pthread_rwlock_init(&temp->block_lock, NULL);
@@ -79,6 +80,7 @@ void cache_insert(char *hostname, char *path, int port, char *content,
   memcpy(temp->content, content, size);
   temp->size = size;
   temp->freq = 0;
+  strcpy(temp->last_modified, last_modified);
   temp->next = cache->head->next;
   temp->prev = cache->head;
   // insert the block to the head
@@ -122,7 +124,7 @@ void print_cache(void) {
 }
 
 void cache_save(const char *filename) {
-  FILE *file = fopen(filename, "wb");
+  FILE *file = fopen(filename, "ab");
   if (file == NULL) {
     return;
   }
@@ -131,6 +133,7 @@ void cache_save(const char *filename) {
   while (temp != cache->tail) {
     fwrite(temp, sizeof(cache_block), 1, file);
     fwrite(temp->content, temp->size, 1, file);
+    fwrite(temp->last_modified, MAXLINE, 1, file);
     temp = temp->next;
   }
 
@@ -152,7 +155,7 @@ void cache_retreive(const char *filename) {
     }
     fread(temp.content, temp.size, 1, file); // Read content from file
     cache_insert(temp.hostname, temp.path, temp.port, temp.content, temp.size,
-                 filename);
+                 temp.last_modified, filename);
   }
   fclose(file);
 }
