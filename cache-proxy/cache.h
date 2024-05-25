@@ -6,11 +6,10 @@ typedef struct cache_block {
   int port;
   char hostname[MAXLINE];
   char path[MAXLINE];
-  char *content;               // the content of the cache block (the response)
-  size_t size;                 // the size of the content
-  char last_modified[MAXLINE]; // last modified time stamp
-  struct cache_block *prev;    // the prev cache block
-  struct cache_block *next;    // the next cache block
+  char *content;            // the content of the cache block (the response)
+  size_t size;              // the size of the content
+  struct cache_block *prev; // the prev cache block
+  struct cache_block *next; // the next cache block
   pthread_rwlock_t block_lock;
 } cache_block;
 
@@ -26,7 +25,7 @@ void cache_deinit(void);               // free the cache
 void print_cache(void);                // for debugging
 
 void cache_insert(char *hostname, char *path, int port, char *content,
-                  size_t size, const char *last_modified, const char *filename);
+                  size_t size, const char *filename);
 cache_block *cache_find(char *hostname, char *path, int port);
 void cache_delete(void);
 void cache_save(const char *filename);

@@ -86,108 +86,49 @@ void handle_proxy(int fd) {
   char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
   char hostname[MAXLINE], path[MAXLINE], port[MAXLINE];
   char server_buf[MAXLINE], obj[MAX_OBJECT_SIZE];
-  rio_t rio_client, rio_server;
+  rio_t rio_cilent, rio_server;
   int serverfd;
   int port_int;
   size_t n, obj_len = 0;
-  char last_modified[MAXLINE] = "";
-  int response_status;
-  char response_version[MAXLINE];
 
-  rio_readinitb(&rio_client, fd);
-  rio_readlineb(&rio_client, buf, MAXLINE);
+  rio_readinitb(&rio_cilent, fd);
+  rio_readlineb(&rio_cilent, buf, MAXLINE);
 
   sscanf(buf, "%s %s %s", method, uri, version);
-  printf("Request line:\n%s", buf);
-
+  printf("Request line:\n");
+  printf("%s", buf);
   if (strcasecmp(method, "GET") != 0) {
     printf("501: Proxy does not implement this method\n");
     return;
   }
-
   if (!handle_uri(uri, hostname, path, &port_int)) {
     printf("400: Proxy could not parse the request\n");
     return;
   } else {
+    // connect to server
     printf("hostname: %s, url: %s, port: %d\n", hostname, path, port_int);
     sprintf(port, "%d", port_int);
 
+    // read response from server
+    // cache hit -> return cache content
+    // miss -> socket connect to server
     cache_block *block = cache_find(hostname, path, port_int);
     if (block != NULL) {
-      // If cache hit, send If-Modified-Since header
       printf("Cache hit!\n");
-      strcpy(last_modified, block->last_modified);
-      serverfd = open_clientfd(hostname, port);
-      if (serverfd < 0) {
-        printf("404: Proxy could not connect to this server\n");
-        return;
-      }
-
-      // Send request to server with If-Modified-Since
-      rio_readinitb(&rio_server, serverfd);
-      sprintf(server_buf, "GET %s HTTP/1.0\r\n", path);
-      rio_writen(serverfd, server_buf, strlen(server_buf));
-      sprintf(server_buf, "Host: %s\r\n", hostname);
-      rio_writen(serverfd, server_buf, strlen(server_buf));
-      if (strlen(last_modified) > 0) {
-        sprintf(server_buf, "If-Modified-Since: %s\r\n", last_modified);
-        rio_writen(serverfd, server_buf, strlen(server_buf));
-      }
-      rio_writen(serverfd, (void *)user_agent_hdr, strlen(user_agent_hdr));
-      rio_writen(serverfd, (void *)connection_hdr, strlen(connection_hdr));
-      rio_writen(serverfd, (void *)proxy_connection_hdr,
-                 strlen(proxy_connection_hdr));
-      rio_writen(serverfd, "\r\n", 2);
-
-      // Read response
-      rio_readlineb(&rio_server, server_buf, MAXLINE);
-      sscanf(server_buf, "%s %d", response_version, &response_status);
-
-      if (response_status == 304) { // Not Modified
-        printf("304 Not Modified - Using cached version\n");
-        rio_writen(fd, block->content, block->size);
-        Close(serverfd);
-        return;
-      } else {
-        // Read headers and find Last-Modified
-        while (strcmp(server_buf, "\r\n")) {
-          rio_readlineb(&rio_server, server_buf, MAXLINE);
-          if (strncasecmp(server_buf, "Last-Modified:", 14) == 0) {
-            sscanf(server_buf + 14, "%s", last_modified);
-          }
-        }
-
-        // Read the response body
-        obj_len = 0;
-        while ((n = rio_readnb(&rio_server, server_buf, MAXLINE)) > 0) {
-          obj_len += n;
-          if (obj_len <= MAX_OBJECT_SIZE) {
-            memcpy(obj + obj_len - n, server_buf, n);
-          }
-          rio_writen(fd, server_buf, n);
-        }
-
-        if (obj_len <= MAX_OBJECT_SIZE) {
-          cache_insert(hostname, path, port_int, obj, obj_len, CACHE_FILE,
-                       last_modified);
-          printf("Cache insert %ld bytes object\n", obj_len);
-        } else {
-          printf("Cache failed, object over limit size!\n");
-        }
-        printf("Respond %ld bytes object\n", obj_len);
-        Close(serverfd);
-      }
+      rio_writen(fd, block->content, block->size);
+      printf("Respond %ld bytes object:\n", block->size);
+      return;
     } else {
-      // No cache entry, fetch from server
-      printf("Cache miss! Fetching new data\n");
+      printf("Cache miss!\n");
       serverfd = open_clientfd(hostname, port);
       if (serverfd < 0) {
         printf("404: Proxy could not connect to this server\n");
         return;
       }
 
-      // Send request to server
+      // send request to server
       rio_readinitb(&rio_server, serverfd);
+      // send request header
       sprintf(server_buf, "GET %s HTTP/1.0\r\n", path);
       rio_writen(serverfd, server_buf, strlen(server_buf));
       sprintf(server_buf, "Host: %s\r\n", hostname);
@@ -198,36 +139,22 @@ void handle_proxy(int fd) {
                  strlen(proxy_connection_hdr));
       rio_writen(serverfd, "\r\n", 2);
 
-      // Read headers and find Last-Modified
-      rio_readlineb(&rio_server, server_buf, MAXLINE);
-      sscanf(server_buf, "%s %d", response_version, &response_status);
-
-      while (strcmp(server_buf, "\r\n")) {
-        rio_readlineb(&rio_server, server_buf, MAXLINE);
-        if (strncasecmp(server_buf, "Last-Modified:", 14) == 0) {
-          sscanf(server_buf + 14, "%s", last_modified);
-        }
-      }
-
-      // Read the response body
-      obj_len = 0;
+      // read response header and body
       while ((n = rio_readnb(&rio_server, server_buf, MAXLINE)) > 0) {
         obj_len += n;
         if (obj_len <= MAX_OBJECT_SIZE) {
           memcpy(obj + obj_len - n, server_buf, n);
         }
-        rio_writen(fd, server_buf, n);
+        rio_writen(fd, server_buf, n); // send response to client
       }
-
       if (obj_len <= MAX_OBJECT_SIZE) {
-        cache_insert(hostname, path, port_int, obj, obj_len, CACHE_FILE,
-                     last_modified);
-        printf("Cache insert %ld bytes object\n", obj_len);
+        cache_insert(hostname, path, port_int, obj, obj_len, CACHE_FILE);
+        printf("Cache insert %ld bytes object:\n", obj_len);
       } else {
         printf("Cache failed, object over limit size!\n");
       }
-      printf("Respond %ld bytes object\n", obj_len);
-      Close(serverfd);
+      printf("Respond %ld bytes object:\n", obj_len);
+      // Close(serverfd);
     }
   }
 }
